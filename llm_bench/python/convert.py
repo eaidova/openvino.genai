@@ -61,6 +61,7 @@ from utils.conversion_utils.better_transformer_patch import (
 )
 from utils.conversion_utils.export_configs import *  # noqa: F401,F403
 from utils.ov_model_classes import register_normalized_configs
+from utils.conversion_utils.attention_sink_patch import attention_sink_patch
 from utils.conversion_utils.helpers import (
     PYTORCH_DIR,
     OV_DIR,
@@ -135,6 +136,9 @@ def convert_optimum_causallm_base(model, args, model_config=None, compress_only=
     if not compress_only:
         model_config = model.config
         model = patch_model_for_optimum_export(model)
+        if args.attention_sinks:
+            model = attention_sink_patch(model, sink_size=args.sink_size, window_size=args.sink_window_size, shift=args.sink_shift)
+            model_config = model.config
         precision = precision if not gptq_applied else GPTQ_DIR.format(precision=args.precision)
         ov_out_dir = Path(args.output_dir) / PYTORCH_DIR / OV_DIR / precision
         if gptq_applied and args.compress_weights:
@@ -379,7 +383,7 @@ def convert_seq2seq(args):
     if ov_compression:
         if compress_only:
             log.info(
-                f"Model conversion to {args.precision} will be skipped as found converted model. "
+                f"Model conversion to {args.precision} will patch_model_for_optimum_exporte skipped as found converted model. "
                 "If it is not expected behaviour, please remove previously converted model or use --force_convert option"
             )
         for compress_option in args.compress_weights:
@@ -1381,6 +1385,11 @@ def main():
         help="Compress all layers including embeddings and prediction head",
     )
     add_stateful_model_arguments(parser)
+    attention_sinks_group = parser.add_argument_group("Attantion sinks arguments")
+    attention_sinks_group.add_argument("--attention_sinks", action="store_true")
+    attention_sinks_group.add_argument("--sink_window_size", type=int, default=1020)
+    attention_sinks_group.add_argument("--sink_size", type=int, default=4)
+    attention_sinks_group.add_argument("--sink_shift", type=int, default=7)
 
     args = parser.parse_args()
     log.info(f"openvino runtime version: {get_version()}")

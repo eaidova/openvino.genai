@@ -41,6 +41,7 @@ OV_MODEL_CLASSES_MAPPING = {
     'chatglm3': OVChatGLM2Model,
     'chatglm': OVChatGLMModel,
     'qwen': OVQwenModel,
+    "qwen1.5": OVModelForCausalLM,
 }
 
 PT_MODEL_CLASSES_MAPPING = {
@@ -76,6 +77,7 @@ USE_CASES = {
         'opt-',
         'pythia-',
         'stablelm-',
+        'stablelm2-',
         'stable-zephyr-',
         'rocket-'
         'blenderbot',

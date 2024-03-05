@@ -9,6 +9,7 @@ from typing import Optional, Union, Dict, List, Tuple, Callable, Iterable, Any
 from tempfile import TemporaryDirectory
 import PIL
 import numpy as np
+from openvino.runtime.ie_api import Model
 import torch
 from diffusers.schedulers import LMSDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
@@ -46,6 +47,34 @@ def register_normalized_configs():
     NormalizedConfigManager._conf["aquila"] = NormalizedConfigManager._conf["llama"]
     NormalizedConfigManager._conf["minicpm"] = NormalizedConfigManager._conf["llama"]
     NormalizedConfigManager._conf["mixtral"] = NormalizedConfigManager._conf["mistral"]
+
+
+def attention_sink_forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        **kwargs
+    ):
+    if getattr(self.config, "attention_sink", None):
+        sink_size, window_size, shift_size = self.config.attention_sink
+        if past_key_values is None:
+            self.past_len = 0
+            input_size = input_ids.shape[1]
+        elif self.use_cache:
+            input_size = 1
+            if input_size + self.past_len >= sink_size + window_size:
+                self.past_len = sink_size + window_size - input_size - shift_size
+        if attention_mask.shape[1] != input_size + self.past_len:
+            attention_mask = torch.ones((input_ids.shape[0], input_size + self.past_len), dtype=input_ids.dtype)
+            if "position_ids" in self.input_names:
+                position_ids = np.cumsum(attention_mask, axis=1) - 1
+                position_ids[attention_mask == 0] = 1
+                if past_key_values:
+                    position_ids = position_ids[:, -1:] 
+        self.past_len = input_size + self.past_len
+    return self._orig_forward(input_ids=input_ids, attention_mask=attention_mask, past_key_values=past_key_values, position_ids=position_ids, **kwargs)
 
 
 class OVMPTModel(OVModelForCausalLM):
@@ -223,7 +252,10 @@ class OVLDMSuperResolutionPipeline(DiffusionPipeline):
                 One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
                 to make generation deterministic.
             output_type (`str`, *optional*, defaults to `'pil'`):
-                The output format of the generate image. Choose between
+                The output format of the generate image. Choose betweenclass AttentionSinkModelForCausalLM(OVModelForCausalLM):
+    def __init__(self, model: Model, config: PretrainedConfig = None, device: str = "CPU", dynamic_shapes: bool = True, ov_config: Dict[str, str] | None = None, model_save_dir: str | Path | TemporaryDirectory | None = None, **kwargs):
+        super().__init__(model, config, device, dynamic_shapes, ov_config, model_save_dir, **kwargs)
+        self.sink_size, self.sink_window, self.sink_shift = self.config.attention_sink
                 [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
             return_dict (`bool`, *optional*):
                 Whether or not to return a [`~pipelines.ImagePipelineOutput`] instead of a plain tuple.
@@ -714,7 +746,7 @@ class OVQwenModel(OVModelForCausalLM):
             shapes[inputs] = inputs.get_partial_shape()
             shapes[inputs][0] = -1
             if shapes[inputs].rank.get_length() > 1:
-                if shapes[inputs].rank.get_length() < 4 or not shapes[inputs][2].is_dynamic(): 
+                if shapes[inputs].rank.get_length() < 4 or not shapes[inputs][2].is_dynamic: 
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model

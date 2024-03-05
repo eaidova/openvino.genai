@@ -13,7 +13,7 @@ import utils.hook_greedy_search
 import utils.hook_beam_search
 
 from utils.config_class import OV_MODEL_CLASSES_MAPPING, TOKENIZE_CLASSES_MAPPING, DEFAULT_MODEL_CLASSES
-from .ov_model_classes import register_normalized_configs
+from .ov_model_classes import register_normalized_configs, attention_sink_forward
 import openvino.runtime.opset13 as opset
 
 
@@ -152,6 +152,11 @@ def create_text_gen_model(model_path, device, **kwargs):
                 config=AutoConfig.from_pretrained(model_path, trust_remote_code=True),
                 stateful=kwargs.get("stateful", None)
             )
+            if hasattr(ov_model.config, "attention_sink"):
+                sink_size, sink_window, sink_shift = getattr(ov_model.config, "attention_sink")
+                log.info(f"Detected model with attention sinks (sink_size: {sink_size}, sink_window: {sink_window}, sink_shift: {sink_shift})")
+                ov_model._orig_forward = ov_model.forward
+                ov_model.forward = types.MethodType(attention_sink_forward, ov_model)
             end = time.perf_counter()
         else:
             start = time.perf_counter()
@@ -164,6 +169,11 @@ def create_text_gen_model(model_path, device, **kwargs):
                 compile=False,
                 stateful=kwargs.get("stateful", None)
             )
+            if hasattr(ov_model.config, "attention_sink"):
+                ov_model._orig_forward = ov_model.forward
+                ov_model.forward = types.MethodType(attention_sink_forward, ov_model)
+                sink_size, sink_window, sink_shift = getattr(ov_model.config, "attention_sink")
+                log.info(f"Detected model with attention sinks (sink_size: {sink_size}, sink_window: {sink_window}, sink_shift: {sink_shift})")
             if not isinstance(ov_model, OV_MODEL_CLASSES_MAPPING['t5']):
                 patch_inter_processing_and_compile(ov_model, **kwargs)
             end = time.perf_counter()
